@@ -63,13 +63,38 @@ app.get("/tickets/open", (req, res) => {
     });
 });
 
+// GET /tickets/details -- note return all tickets with joined user and department names
+app.get("/tickets/details", (req, res) => {
+    const sql = "SELECT t.id as ticket_id, t.title, t.description, t.priority, t.status, t.created_at, CONCAT(u1.first_name, ' ', u1.last_name) AS submitted_by, CONCAT(u2.first_name, ' ', u2.last_name) AS assigned_to, d.name AS department FROM tickets t JOIN users u1 on t.submitted_by = u1.id LEFT JOIN users u2 on t.assigned_to = u2.id JOIN departments d on t.department_id = d.id ORDER BY d.created_at DESC";
+    db.query(sql, (error, results) => {
+        if (error) {
+            console.error("Error getting ticket details:", error);
+            return res.status(500).json({ error: "Failed to get ticket details." });
+        }
+        res.json(results);
+    });
+});
+
+//  GET /tickets/:id/details -- returns one ticket with joined names 
+app.get("/tickets/:id/details", (req, res) => {
+    const ticketId = req.params.id;
+    const sql = "SELECT t.id AS ticket_id, t.title, t.description, t.priority, t.status, t.created_at, CONCAT(u1.first_name, ' ', u1.last_name) AS submitted_by, CONCAT(u2.first_name, ' ', u2.last_name) AS assigned_to, d.name AS department FROM tickets t JOIN users u1 ON t.submitted_by = u1.id LEFT JOIN users u2 ON t.assigned_to = u2.id JOIN departments d ON t.department_id = d.id WHERE t.id = ?";
+    db.query(sql, [ticketId], (error, results) => {
+        if (error) {
+            console.error("Error getting ticket details:", error);
+            return res.status(500).json({ error: "Failed to get ticket details." });
+        }
+        res.json(results);
+    });
+});
+
 // GET /tickets/:id -- returns tickets by id
 app.get("/tickets/:id", (req, res) => {
     const ticketId = req.params.id;
     const sql = "SELECT * FROM tickets WHERE id = ?";
     db.query(sql, [ticketId], (error, results) => {
         if (error) {
-            console.error("Error getting ticket:", error);
+            console.error("Error getting ticket details:", error);
             return res.status(500).json({ error: "Failed to get ticket." });
         }
         if (results.length === 0) {
@@ -217,6 +242,54 @@ app.post('/ticket-notes', async (req, res) => {
         res.status(500).json({error:"Failed to add note."});
     }
 });
+
+// POST /login -- validates Credential;s and returns user info with role
+app.post("/login", async (req, res) => {
+    const {email, password} = req.body
+    // validate required fields
+    if( !email || !password) {
+        return res.status(400).json({error: "Email and password are required."});
+    }
+    // lookup user by email
+    const sql = "SELECT * FROM users WHERE email = ?";
+    db.query(sql, [email], async(error, results) => {
+        if(error){
+            console,error("Login query error:", error);
+            return res.status(500).json({error:"Something went wrong."});
+        }
+        // check if user exists
+        if(results.length === 0) {
+            return res.status(401).json({error:"Invalid email or password."});
+        }
+        const user = results[0];
+        // check password
+        if (user.password !== password){
+            return res.status(401).json({error:"Invalid email or password."});
+        }
+        // automatically log the login action to MongoDB
+        try{
+            const mongoDb = getMongo();
+            await mongoDb.collection("activity_logs").insertOne({
+                action: "user_login",
+                user_id: user.id,
+                ticket_id: null,
+                details: `${user.first_name} ${user.last_name} logged in as ${user.role}`,
+                timestamp: new Date()
+            });
+        }catch(mongoError){
+            console.error("Failed to log login activity:", mongoError);
+            // do not fail the login logging fails
+        }
+        // return user info including role
+        res.status(200).json({
+            message: "Login successful.",
+            first_name: user.first_name,
+            last_name: user.last_name,
+            role: user.role,
+            user_id: user.id,
+        })
+    })
+})
 
 // POST /activity-logs -- manually creates an activity log in MongoDB
 app.post('/activity-logs', async (req,res) => {
